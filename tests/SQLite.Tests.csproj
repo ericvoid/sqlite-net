@@ -69,5 +69,14 @@
     <Compile Include="OpenTests.cs" />
     <Compile Include="MigrationTest.cs" />
     <Compile Include="EqualsTest.cs" />
+    <Compile Include="..\src\SQLiteAttributes.cs">
+      <Link>SQLiteAttributes.cs</Link>
+    </Compile>
+    <Compile Include="..\src\SQLiteMapping.cs">
+      <Link>SQLiteMapping.cs</Link>
+    </Compile>
+    <Compile Include="..\src\SQLiteQuery.cs">
+      <Link>SQLiteQuery.cs</Link>
+    </Compile>
   </ItemGroup>
 </Project>
