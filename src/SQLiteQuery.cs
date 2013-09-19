@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Reflection;
 
 #if USE_CSHARP_SQLITE
 using Sqlite3 = Community.CsharpSqlite.Sqlite3;
@@ -19,7 +20,6 @@ using Sqlite3Statement = Sqlite.Statement;
 #else
 using Sqlite3DatabaseHandle = System.IntPtr;
 using Sqlite3Statement = System.IntPtr;
-using System.Reflection;
 #endif
 
 namespace SQLite
@@ -113,8 +113,7 @@ namespace SQLite
 					for (int i = 0; i < cols.Length; i++) {
 						if (cols [i] == null)
 							continue;
-						var colType = SQLite3.ColumnType (stmt, i);
-						var val = ReadCol (stmt, i, colType, cols [i].ColumnType);
+						var val = ReadColumn(stmt, i, cols[i].ColumnType);
 						cols [i].SetValue (obj, val);
  					}
 					OnInstanceCreated (obj);
@@ -141,8 +140,7 @@ namespace SQLite
             {
                 var r = SQLite3.Step (stmt);
                 if (r == SQLite3.Result.Row) {
-                    var colType = SQLite3.ColumnType (stmt, 0);
-                    val = (T)ReadCol (stmt, 0, colType, typeof(T));
+                    val = (T)ReadColumn(stmt, 0, typeof(T));
                 }
                 else if (r == SQLite3.Result.Done) {
                 }
@@ -158,6 +156,22 @@ namespace SQLite
 			
 			return val;
 		}
+		
+		
+		private object ReadColumn(Sqlite3Statement stmt, int index, Type targetType)
+		{
+			if (SQLite3.ColumnType(stmt, index) == SQLite3.ColType.Null) {
+				return null;
+			}
+			
+			var options = new TypeAdapterOptions() { 
+				StoreDateTimeAsTicks=_conn.StoreDateTimeAsTicks,
+			};
+			
+			return TypeAdapterFactory.Instance.GetAdapter(targetType, options).ReadColumn(stmt, index);
+		}
+		
+		
 
 		public void Bind (string name, object val)
 		{
@@ -216,40 +230,16 @@ namespace SQLite
 		{
 			if (value == null) {
 				SQLite3.BindNull (stmt, index);
-			} else {
-				if (value is Int32) {
-					SQLite3.BindInt (stmt, index, (int)value);
-				} else if (value is String) {
-					SQLite3.BindText (stmt, index, (string)value, -1, NegativePointer);
-				} else if (value is Byte || value is UInt16 || value is SByte || value is Int16) {
-					SQLite3.BindInt (stmt, index, Convert.ToInt32 (value));
-				} else if (value is Boolean) {
-					SQLite3.BindInt (stmt, index, (bool)value ? 1 : 0);
-				} else if (value is UInt32 || value is Int64) {
-					SQLite3.BindInt64 (stmt, index, Convert.ToInt64 (value));
-				} else if (value is Single || value is Double || value is Decimal) {
-					SQLite3.BindDouble (stmt, index, Convert.ToDouble (value));
-				} else if (value is DateTime) {
-					if (storeDateTimeAsTicks) {
-						SQLite3.BindInt64 (stmt, index, ((DateTime)value).Ticks);
-					}
-					else {
-						SQLite3.BindText (stmt, index, ((DateTime)value).ToString ("yyyy-MM-dd HH:mm:ss"), -1, NegativePointer);
-					}
-#if !NETFX_CORE
-				} else if (value.GetType().IsEnum) {
-#else
-				} else if (value.GetType().GetTypeInfo().IsEnum) {
-#endif
-					SQLite3.BindInt (stmt, index, Convert.ToInt32 (value));
-                } else if (value is byte[]){
-                    SQLite3.BindBlob(stmt, index, (byte[]) value, ((byte[]) value).Length, NegativePointer);
-                } else if (value is Guid) {
-                    SQLite3.BindText(stmt, index, ((Guid)value).ToString(), 72, NegativePointer);
-                } else {
-                    throw new NotSupportedException("Cannot store type: " + value.GetType());
-                }
+				return;
 			}
+			
+			var options = new TypeAdapterOptions() { 
+				StoreDateTimeAsTicks=storeDateTimeAsTicks,
+				NegativePointer=NegativePointer
+			};
+			
+			TypeAdapterFactory.Instance.GetAdapter(value.GetType(), options).BindParameter(stmt, index, value);
+		
 		}
 
 		class Binding
@@ -261,59 +251,6 @@ namespace SQLite
 			public int Index { get; set; }
 		}
 
-		object ReadCol (Sqlite3Statement stmt, int index, SQLite3.ColType type, Type clrType)
-		{
-			if (type == SQLite3.ColType.Null) {
-				return null;
-			} else {
-				if (clrType == typeof(String)) {
-					return SQLite3.ColumnString (stmt, index);
-				} else if (clrType == typeof(Int32)) {
-					return (int)SQLite3.ColumnInt (stmt, index);
-				} else if (clrType == typeof(Boolean)) {
-					return SQLite3.ColumnInt (stmt, index) == 1;
-				} else if (clrType == typeof(double)) {
-					return SQLite3.ColumnDouble (stmt, index);
-				} else if (clrType == typeof(float)) {
-					return (float)SQLite3.ColumnDouble (stmt, index);
-				} else if (clrType == typeof(DateTime)) {
-					if (_conn.StoreDateTimeAsTicks) {
-						return new DateTime (SQLite3.ColumnInt64 (stmt, index));
-					}
-					else {
-						var text = SQLite3.ColumnString (stmt, index);
-						return DateTime.Parse (text);
-					}
-#if !NETFX_CORE
-				} else if (clrType.IsEnum) {
-#else
-				} else if (clrType.GetTypeInfo().IsEnum) {
-#endif
-					return SQLite3.ColumnInt (stmt, index);
-				} else if (clrType == typeof(Int64)) {
-					return SQLite3.ColumnInt64 (stmt, index);
-				} else if (clrType == typeof(UInt32)) {
-					return (uint)SQLite3.ColumnInt64 (stmt, index);
-				} else if (clrType == typeof(decimal)) {
-					return (decimal)SQLite3.ColumnDouble (stmt, index);
-				} else if (clrType == typeof(Byte)) {
-					return (byte)SQLite3.ColumnInt (stmt, index);
-				} else if (clrType == typeof(UInt16)) {
-					return (ushort)SQLite3.ColumnInt (stmt, index);
-				} else if (clrType == typeof(Int16)) {
-					return (short)SQLite3.ColumnInt (stmt, index);
-				} else if (clrType == typeof(sbyte)) {
-					return (sbyte)SQLite3.ColumnInt (stmt, index);
-				} else if (clrType == typeof(byte[])) {
-					return SQLite3.ColumnByteArray (stmt, index);
-				} else if (clrType == typeof(Guid)) {
-                  var text = SQLite3.ColumnString(stmt, index);
-                  return new Guid(text);
-                } else{
-					throw new NotSupportedException ("Don't know how to read " + clrType);
-				}
-			}
-		}
 	}
 	
 	

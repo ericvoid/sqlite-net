@@ -50,6 +50,8 @@ namespace SQLite
 				var ignore = p.GetCustomAttributes (typeof(IgnoreAttribute), true).Count() > 0;
 #endif
 				if (p.CanWrite && !ignore) {
+					// if p.type == Dualkey, do something
+					// else ...
 					cols.Add (new Column (p, createFlags));
 				}
 			}
@@ -318,34 +320,12 @@ namespace SQLite
 				
 		private string SqlType (bool storeDateTimeAsTicks)
 		{
-			var clrType = this.ColumnType;
+			var options = new TypeAdapterOptions() { 
+				StoreDateTimeAsTicks=storeDateTimeAsTicks,
+				MaxLength=this.MaxStringLength
+			};
 					
-			if (clrType == typeof(Boolean) || clrType == typeof(Byte) || clrType == typeof(UInt16) || clrType == typeof(SByte) || clrType == typeof(Int16) || clrType == typeof(Int32)) {
-				return "integer";
-			} else if (clrType == typeof(UInt32) || clrType == typeof(Int64)) {
-				return "bigint";
-			} else if (clrType == typeof(Single) || clrType == typeof(Double) || clrType == typeof(Decimal)) {
-				return "float";
-			} else if (clrType == typeof(String)) {
-				int len = this.MaxStringLength;
-				return "varchar(" + len + ")";
-						
-			} else if (clrType == typeof(DateTime)) {
-				return storeDateTimeAsTicks ? "bigint" : "datetime";
-						
-#if !NETFX_CORE
-			} else if (clrType.IsEnum) {
-#else
-			} else if (clrType.GetTypeInfo().IsEnum) {
-#endif
-				return "integer";
-			} else if (clrType == typeof(byte[])) {
-				return "blob";
-            } else if (clrType == typeof(Guid)) {
-                return "varchar(36)";
-            } else {
-				throw new NotSupportedException ("Don't know about " + clrType);
-			}
+			return TypeAdapterFactory.Instance.GetAdapter(this.ColumnType, options).GetSqlType();
 		}
 	} 
 			
