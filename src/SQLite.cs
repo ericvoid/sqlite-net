@@ -329,7 +329,7 @@ namespace SQLite
 			}
 			var query = "create table if not exists \"" + map.TableName + "\"(\n";
 			
-			var decls = map.Columns.Select (p => Orm.SqlDecl (p, StoreDateTimeAsTicks));
+			var decls = map.Columns.Select (p => p.SqlDecl(StoreDateTimeAsTicks));
 			var decl = string.Join (",\n", decls.ToArray ());
 			query += decl;
 			query += ")";
@@ -464,7 +464,7 @@ namespace SQLite
 		{
 			var existingCols = GetTableInfo (map.TableName);
 			
-			var toBeAdded = new List<TableMapping.Column> ();
+			var toBeAdded = new List<Column> ();
 			
 			foreach (var p in map.Columns) {
 				var found = false;
@@ -479,7 +479,7 @@ namespace SQLite
 			}
 			
 			foreach (var p in toBeAdded) {
-				var addCol = "alter table \"" + map.TableName + "\" add column " + Orm.SqlDecl (p, StoreDateTimeAsTicks);
+				var addCol = "alter table \"" + map.TableName + "\" add column " + p.SqlDecl(StoreDateTimeAsTicks);
 				Execute (addCol);
 			}
 		}
@@ -1679,128 +1679,80 @@ namespace SQLite
 			}
 		}
 
-		public class Column
-		{
-			PropertyInfo _prop;
-
-			public string Name { get; private set; }
-
-			public string PropertyName { get { return _prop.Name; } }
-
-			public Type ColumnType { get; private set; }
-
-			public string Collation { get; private set; }
-
-            public bool IsAutoInc { get; private set; }
-            public bool IsAutoGuid { get; private set; }
-
-			public bool IsPK { get; private set; }
-
-			public IEnumerable<IndexedAttribute> Indices { get; set; }
-
-			public bool IsNullable { get; private set; }
-
-			public int MaxStringLength { get; private set; }
-
-            public Column(PropertyInfo prop, CreateFlags createFlags = CreateFlags.None)
-            {
-                var colAttr = (ColumnAttribute)prop.GetCustomAttributes(typeof(ColumnAttribute), true).FirstOrDefault();
-
-                _prop = prop;
-                Name = colAttr == null ? prop.Name : colAttr.Name;
-                //If this type is Nullable<T> then Nullable.GetUnderlyingType returns the T, otherwise it returns null, so get the actual type instead
-                ColumnType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
-                Collation = Orm.Collation(prop);
-
-                IsPK = Orm.IsPK(prop) ||
-					(((createFlags & CreateFlags.ImplicitPK) == CreateFlags.ImplicitPK) &&
-					 	string.Compare (prop.Name, Orm.ImplicitPkName, StringComparison.OrdinalIgnoreCase) == 0);
-
-                var isAuto = Orm.IsAutoInc(prop) || (IsPK && ((createFlags & CreateFlags.AutoIncPK) == CreateFlags.AutoIncPK));
-                IsAutoGuid = isAuto && ColumnType == typeof(Guid);
-                IsAutoInc = isAuto && !IsAutoGuid;
-
-                Indices = Orm.GetIndices(prop);
-                if (!Indices.Any()
-                    && !IsPK
-                    && ((createFlags & CreateFlags.ImplicitIndex) == CreateFlags.ImplicitIndex)
-                    && Name.EndsWith (Orm.ImplicitIndexSuffix, StringComparison.OrdinalIgnoreCase)
-                    )
-                {
-                    Indices = new IndexedAttribute[] { new IndexedAttribute() };
-                }
-                IsNullable = !IsPK;
-                MaxStringLength = Orm.MaxStringLength(prop);
-            }
-
-			public void SetValue (object obj, object val)
-			{
-				_prop.SetValue (obj, val, null);
-			}
-
-			public object GetValue (object obj)
-			{
-				return _prop.GetValue (obj, null);
-			}
-		}
 	}
 
-	public static class Orm
+
+	public class Column
 	{
-        public const int DefaultMaxStringLength = 140;
+		public const int DefaultMaxStringLength = 140;
         public const string ImplicitPkName = "Id";
-        public const string ImplicitIndexSuffix = "Id";
+    	public const string ImplicitIndexSuffix = "Id";
+		
+		PropertyInfo _prop;
 
-		public static string SqlDecl (TableMapping.Column p, bool storeDateTimeAsTicks)
+		public string Name { get; private set; }
+
+		public string PropertyName { get { return _prop.Name; } }
+
+		public Type ColumnType { get; private set; }
+
+		public string Collation { get; private set; }
+
+        public bool IsAutoInc { get; private set; }
+        public bool IsAutoGuid { get; private set; }
+
+		public bool IsPK { get; private set; }
+
+		public IEnumerable<IndexedAttribute> Indices { get; set; }
+
+		public bool IsNullable { get; private set; }
+
+		public int MaxStringLength { get; private set; }
+		
+
+        internal Column(PropertyInfo prop, CreateFlags createFlags = CreateFlags.None)
+        {
+            var colAttr = (ColumnAttribute)prop.GetCustomAttributes(typeof(ColumnAttribute), true).FirstOrDefault();
+
+            _prop = prop;
+            Name = colAttr == null ? prop.Name : colAttr.Name;
+            //If this type is Nullable<T> then Nullable.GetUnderlyingType returns the T, otherwise it returns null, so get the actual type instead
+            ColumnType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+            Collation = GetCollation(prop);
+
+            IsPK = HasPkAttribute(prop) ||
+				(((createFlags & CreateFlags.ImplicitPK) == CreateFlags.ImplicitPK) &&
+				 	string.Compare (prop.Name, Column.ImplicitPkName, StringComparison.OrdinalIgnoreCase) == 0);
+
+            var isAuto = HasAutoIncAttribute(prop) || (IsPK && ((createFlags & CreateFlags.AutoIncPK) == CreateFlags.AutoIncPK));
+            IsAutoGuid = isAuto && ColumnType == typeof(Guid);
+            IsAutoInc = isAuto && !IsAutoGuid;
+
+            Indices = GetIndices(prop);
+            if (!Indices.Any()
+                && !IsPK
+                && ((createFlags & CreateFlags.ImplicitIndex) == CreateFlags.ImplicitIndex)
+                && Name.EndsWith (Column.ImplicitIndexSuffix, StringComparison.OrdinalIgnoreCase)
+                )
+            {
+                Indices = new IndexedAttribute[] { new IndexedAttribute() };
+            }
+            IsNullable = !IsPK;
+            MaxStringLength = GetMaxStringLength(prop);
+        }
+
+		public void SetValue (object obj, object val)
 		{
-			string decl = "\"" + p.Name + "\" " + SqlType (p, storeDateTimeAsTicks) + " ";
-			
-			if (p.IsPK) {
-				decl += "primary key ";
-			}
-			if (p.IsAutoInc) {
-				decl += "autoincrement ";
-			}
-			if (!p.IsNullable) {
-				decl += "not null ";
-			}
-			if (!string.IsNullOrEmpty (p.Collation)) {
-				decl += "collate " + p.Collation + " ";
-			}
-			
-			return decl;
+			_prop.SetValue (obj, val, null);
 		}
 
-		public static string SqlType (TableMapping.Column p, bool storeDateTimeAsTicks)
+		public object GetValue (object obj)
 		{
-			var clrType = p.ColumnType;
-			if (clrType == typeof(Boolean) || clrType == typeof(Byte) || clrType == typeof(UInt16) || clrType == typeof(SByte) || clrType == typeof(Int16) || clrType == typeof(Int32)) {
-				return "integer";
-			} else if (clrType == typeof(UInt32) || clrType == typeof(Int64)) {
-				return "bigint";
-			} else if (clrType == typeof(Single) || clrType == typeof(Double) || clrType == typeof(Decimal)) {
-				return "float";
-			} else if (clrType == typeof(String)) {
-				int len = p.MaxStringLength;
-				return "varchar(" + len + ")";
-			} else if (clrType == typeof(DateTime)) {
-				return storeDateTimeAsTicks ? "bigint" : "datetime";
-#if !NETFX_CORE
-			} else if (clrType.IsEnum) {
-#else
-			} else if (clrType.GetTypeInfo().IsEnum) {
-#endif
-				return "integer";
-			} else if (clrType == typeof(byte[])) {
-				return "blob";
-            } else if (clrType == typeof(Guid)) {
-                return "varchar(36)";
-            } else {
-				throw new NotSupportedException ("Don't know about " + clrType);
-			}
+			return _prop.GetValue (obj, null);
 		}
+		
 
-		public static bool IsPK (MemberInfo p)
+		private bool HasPkAttribute (MemberInfo p)
 		{
 			var attrs = p.GetCustomAttributes (typeof(PrimaryKeyAttribute), true);
 #if !NETFX_CORE
@@ -1810,7 +1762,7 @@ namespace SQLite
 #endif
 		}
 
-		public static string Collation (MemberInfo p)
+		private string GetCollation (MemberInfo p)
 		{
 			var attrs = p.GetCustomAttributes (typeof(CollationAttribute), true);
 #if !NETFX_CORE
@@ -1825,7 +1777,7 @@ namespace SQLite
 			}
 		}
 
-		public static bool IsAutoInc (MemberInfo p)
+		private bool HasAutoIncAttribute (MemberInfo p)
 		{
 			var attrs = p.GetCustomAttributes (typeof(AutoIncrementAttribute), true);
 #if !NETFX_CORE
@@ -1835,13 +1787,13 @@ namespace SQLite
 #endif
 		}
 
-		public static IEnumerable<IndexedAttribute> GetIndices(MemberInfo p)
+		private static IEnumerable<IndexedAttribute> GetIndices(MemberInfo p)
 		{
 			var attrs = p.GetCustomAttributes(typeof(IndexedAttribute), true);
 			return attrs.Cast<IndexedAttribute>();
 		}
 		
-		public static int MaxStringLength(PropertyInfo p)
+		private int GetMaxStringLength(PropertyInfo p)
 		{
 			var attrs = p.GetCustomAttributes (typeof(MaxLengthAttribute), true);
 #if !NETFX_CORE
@@ -1852,10 +1804,63 @@ namespace SQLite
 				return ((MaxLengthAttribute)attrs.First()).Value;
 #endif
 			} else {
-				return DefaultMaxStringLength;
+				return Column.DefaultMaxStringLength;
 			}
 		}
-	}
+				
+		internal string SqlDecl (bool storeDateTimeAsTicks)
+		{
+			string decl = "\"" + this.Name + "\" " + this.SqlType(storeDateTimeAsTicks) + " ";
+			
+			if (IsPK) {
+				decl += "primary key ";
+			}
+			if (IsAutoInc) {
+				decl += "autoincrement ";
+			}
+			if (!IsNullable) {
+				decl += "not null ";
+			}
+			if (!string.IsNullOrEmpty (this.Collation)) {
+				decl += "collate " + this.Collation + " ";
+			}
+			
+			return decl;
+		}
+				
+		private string SqlType (bool storeDateTimeAsTicks)
+		{
+			var clrType = this.ColumnType;
+					
+			if (clrType == typeof(Boolean) || clrType == typeof(Byte) || clrType == typeof(UInt16) || clrType == typeof(SByte) || clrType == typeof(Int16) || clrType == typeof(Int32)) {
+				return "integer";
+			} else if (clrType == typeof(UInt32) || clrType == typeof(Int64)) {
+				return "bigint";
+			} else if (clrType == typeof(Single) || clrType == typeof(Double) || clrType == typeof(Decimal)) {
+				return "float";
+			} else if (clrType == typeof(String)) {
+				int len = this.MaxStringLength;
+				return "varchar(" + len + ")";
+						
+			} else if (clrType == typeof(DateTime)) {
+				return storeDateTimeAsTicks ? "bigint" : "datetime";
+						
+#if !NETFX_CORE
+			} else if (clrType.IsEnum) {
+#else
+			} else if (clrType.GetTypeInfo().IsEnum) {
+#endif
+				return "integer";
+			} else if (clrType == typeof(byte[])) {
+				return "blob";
+            } else if (clrType == typeof(Guid)) {
+                return "varchar(36)";
+            } else {
+				throw new NotSupportedException ("Don't know about " + clrType);
+			}
+		}
+	} 
+			
 
 	public partial class SQLiteCommand
 	{
@@ -1933,7 +1938,7 @@ namespace SQLite
 			var stmt = Prepare ();
 			try
 			{
-				var cols = new TableMapping.Column[SQLite3.ColumnCount (stmt)];
+				var cols = new Column[SQLite3.ColumnCount (stmt)];
 
 				for (int i = 0; i < cols.Length; i++) {
 					var name = SQLite3.ColumnName16 (stmt, i);
@@ -2016,7 +2021,7 @@ namespace SQLite
 			return string.Join (Environment.NewLine, parts);
 		}
 
-		Sqlite3Statement Prepare()
+		private Sqlite3Statement Prepare()
 		{
 			var stmt = SQLite3.Prepare2 (_conn.Handle, CommandText);
 			BindAll (stmt);
@@ -2441,7 +2446,8 @@ namespace SQLite
 
 			public object Value { get; set; }
 		}
-
+		
+		// TODO: Refactor this method please
 		private CompileResult CompileExpr (Expression expr, List<object> queryArgs)
 		{
 			if (expr == null) {
